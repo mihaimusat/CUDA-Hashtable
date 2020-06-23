@@ -1,0 +1,135 @@
+Musat Mihai-Robert
+Grupa 332CB
+
+Tema 3 ASC - CUDA: Parallel Hashtable
+-------------------------------------
+
+Implementare hashtable
+======================
+
+Pentru implementarea temei, am ales sa folosesc strategia de rezolvare 
+a coliziunilor "linear probing", iar fiecare intrare din hashtable am
+implementat-o ca o pereche (key, value), fapt evidentiat in fisierul 
+gpu_hashtable.hpp prin prezenta structurii hash_entry.Astfel, am putut
+sa imi definesc apoi, tot in acelasi fisier, structura hash_table in 
+care retin lista de perechi la care am facut referire anterior, numarul 
+de locuri ocupate si respectiv numarul de locuri disponibile din hashtable 
+la un moment dat.In implementarea functiilor care opereaza pe hashtable am 
+folosit drept functie de hash, o functie de tipul (a * x) % b, cu a și b 
+numere prime, asa cum este precizat in enunt, si anume functia hash1,
+prezenta in schelet.
+
+Voi detalia acum, modul in care am implementat fiecare operatie in parte,
+in afara de cea de initializare a hashtable-ului si de eliberare a acestuia,
+care sunt relativ banale.Astfel, pentru a realiza inserarea in hashtable,
+am creat in primul rand functia kernel_insert, care primeste lista de perechi
+la care voi adauga perechile (key, value) date sub forma de vectori, dimensiunea
+hashtable-ului si numarul de chei inserate.Dupa ce calculez hash-ul cheii pe
+care vreau sa o introduc in hashtable, aceasta fiind si pozitia de la care incep
+sa caut, parcurg succesiv bucket-urile tabelei si ma opresc cand dau de primul
+slot gol.Daca am dat de o cheie pe care am mai intalnit-o deja, atunci fac update
+la valoare, iar daca nu am mai gasit pana acum cheia pe care vreau sa o introduc in 
+hashtable, atunci pur si simplu introduc perechea (key, value) in slotul gol pe care
+l-am gasit.De asemenea, am incercat sa mentin load factor in jurul valorii de 80%, 
+facand reshape tabelei hash la fiecare inserare care ar fi depasit acest prag.
+Pentru a realiza redimensionarea hashtable-ului, am implementat de asemenea o 
+functie kernel, si anume kernel_reshape, care primeste vechea lista de perechi,
+dimensiunea veche a tabelei, noua lista de perechi si noua dimensiune a tabelei,
+care functioneaza in mod asemanator cu kernel_insert, cu mentiunea ca acum mut
+elementele din vechea tabela, in noua tabela, in mod atomic si nu mai manipulez
+aceeasi lista de perechi ca in cazul inserarii.Modul de functionare al reshape are 
+la baza urmatorii pasi: mai intai se aloca o lista noua de perechi suficient de mare, 
+si apoi se muta folosind kernel_reshape elementele din vechea lista in noua lista 
+alocata.Cautarea unei chei in tabela se realizeaza putin diferit fata de cele doua
+functii mentionate anterior.Si in acest caz, am implementat o functie kernel_get,
+care primeste ca parametru lista de perechi, dimensiunea tabelei hash, numarul
+de chei (echivalent cu numarul de sloturi ocupate), si perechile (key, value)
+date sub forma de vectori.Pozitia de la care incep cautarea este data de rezultatul 
+obtinut in urma aplicarii functiei de hash asupra cheii, pozitie pe care o salvez 
+pentru a sti cand am parcurs intreaga tabela.Pe masura ce iterez prin bucket-uri, 
+verific daca am gasit cheia in slotul curent, iar in caz afirmativ opresc cautarea 
+si salvez in vector, valoarea corespunzatoare cheii.Daca inca nu am gasit cheia, atunci 
+incrementez circular indexul si daca la un moment dat indexul curent este egal cu cel 
+initial, atunci inseamna ca trebuie sa ma opresc deoarece am parcurs toate sloturile din 
+hashtable.
+
+Numar de threaduri: 1024
+Numar de blocuri: variabil in functie de tipul operatiei (get sau insert) si
+		  de numarul de threaduri
+Operatii atomice: atomicCAS
+Metode de sincronizare : cudaDeviceSynchronize
+
+Folosire memorie
+================
+
+Lista de perechi a hashtable-ului este mentinuta in VRAM, si este alocata in constructor
+folosind cudaMalloc.De asemenea, aceasta lista este initializata la 0, folosind
+cudaMemset.Dintre cele 3 functii explicate anterior, si anume reshape, insert si get, 
+in ultimele doua se face un swap explicit intre VRAM si RAM pentru a putea trimite 
+parametrii corecti functiilor kernel.Inserarea unei liste de perechi (key, value)
+presupune alocarea de memorie in device si copierea celor 2 vectori, astfel incat
+toate threadurile sa ii poata accesa din memoria globala.Pe de alta parte, in cazul 
+operatiei get, am folosit memorie unificata pentru stocarea vectorului în care se completează 
+valorile pentru cheile cerute, eliminand astfel eventualele probleme care ar fi putut aparea 
+in ceea ce priveste managementul memoriei.
+
+Output rulare tema
+==================
+
+Pentru a testa modul de functionare al implementarii descrise mai sus,
+dar si a avea o perspectiva mai clara asupra performantei acesteia,
+am utilizat coada ibm-dp.q.Cum pe aceasta coada nu merge ultima 
+versiune de CUDA, pe care am folosit-o si la laborator, am facut load
+la un modul mai vechi, care sa fie compatibil cu aceasta arhitectura.
+Astfel, am dat urmatoarele doua comenzi (pe care le-am inclus si intr-un
+script pentru a putea submite joburi catre coada in mod neinteractiv):
+
+module load compilers/gnu-5.4.0
+module load libraries/cuda-8.0
+
+Mentionez ca am incercat sa rulez cod extrem de simplu pe coada hp-sl.q,
+cum ar fi scheletul temei, fara nicio functie implementata, insa 
+de fiecare data, am primit SIGSEGV (exit code -11), desi acest lucru
+nu mi s-a intamplat niciodata pe coada ibm-dp.q.Sper ca atunci cand se 
+va realiza corectarea temei, fie problemele cu coada hp-sl.q vor fi 
+deja rezolvate, fie se va tine cont de mediul de testare pe care l-am 
+descris mai sus (utilizarea cozii ibm-dp.q + versiunea de CUDA 8.0).
+
+Output-ul obtinut la rularea scriptului bench.py este urmatorul:
+
+-------------- Test T1 --------------
+OK	 +10 pts	 HASH_BATCH_INSERT, 1000000, 50, 80
+OK	 +10 pts	 HASH_BATCH_GET, 1000000, inf, 80.0051
+TOTAL	 +20 pts
+
+-------------- Test T2 --------------
+OK	 +5 pts	 HASH_BATCH_INSERT, 2000000, 66.6667, 80
+OK	 +5 pts	 HASH_BATCH_GET, 2000000, 200, 80.0026
+TOTAL	 +10 pts
+
+-------------- Test T3 --------------
+OK	 +5 pts	 HASH_BATCH_INSERT, 2000000, 100, 80
+OK	 +5 pts	 HASH_BATCH_INSERT, 2000000, 50, 80
+OK	 +5 pts	 HASH_BATCH_GET, 2000000, 200, 80.0013
+OK	 +5 pts	 HASH_BATCH_GET, 2000000, 100, 80.0013
+TOTAL	 +20 pts
+
+-------------- Test T4 --------------
+OK	 +5 pts	 HASH_BATCH_INSERT, 2500000, 83.3333, 80
+OK	 +5 pts	 HASH_BATCH_INSERT, 2500000, 83.3333, 80
+OK	 +5 pts	 HASH_BATCH_INSERT, 2500000, 41.6667, 80
+OK	 +5 pts	 HASH_BATCH_INSERT, 2500000, 35.7143, 80
+OK	 +5 pts	 HASH_BATCH_GET, 2500000, 125, 80.0005
+OK	 +5 pts	 HASH_BATCH_GET, 2500000, 125, 80.0005
+OK	 +5 pts	 HASH_BATCH_GET, 2500000, 250, 80.0005
+OK	 +5 pts	 HASH_BATCH_GET, 2500000, 83.3333, 80.0005
+TOTAL	 +40 pts
+
+
+TOTAL gpu_hashtable  90/90
+
+Se observa ca se obtine un load factor si un throughput bun, chiar si pentru
+un numar mare de elemente asupra carora se realizeaza operatii de insert/get,
+iar acest lucru poate fi explicat prin paralelizarea masiva a acestora (pentru 
+fiecare element, se asociaza un thread CUDA separat).
+
